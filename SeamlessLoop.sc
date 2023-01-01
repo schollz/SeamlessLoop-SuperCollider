@@ -1,8 +1,8 @@
-SeamlessLoopRecorder {
+SeamlessLoop {
 	var server;
 	var fnXFader;
-	var busInput;
-	var synInput;
+	var buses;
+	var syns;
 
 	*new {
 		arg argServer;
@@ -12,19 +12,41 @@ SeamlessLoopRecorder {
 	init {
 		arg argServer;
 		server=argServer;
-		busInput = Bus.audio(server,2);
+
+		buses = Dictionary.new();
+		syns = Dictionary.new();
+
+		buses.put("input",Bus.audio(server,2));
+		buses.put("phase",Bus.audio(server,1));
+
+		SynthDef("defPhase",{
+			arg busOut;
+			Out.ar(busOut,Phasor.ar(1,1,0,1728000000));
+		}).send(server);
+
+		SynthDef("defPlay",{
+			arg out,buf,busPhase;
+			var snd = BufRd.ar(
+				numChannels:2,
+				bufnum: buf,
+				phase: In.ar(busPhase,1).mod(BufSamples.ir(buf)),
+				interpolation:4,
+			);
+			Out.ar(out,snd);
+		}).send(server);
 
 		SynthDef("defInput",{
 			arg busOut, lpf=18000, res=1.0;
 			var snd = SoundIn.ar([0,1]);
 			snd = RLPF.ar(snd,lpf,res);
+			snd = LeakDC.ar(snd);
 			Out.ar(busOut,snd);
 		}).send(server);
 
 		SynthDef("defRecord",{
 			arg bufnum, busIn, recLevel=1.0, preLevel=0.0,t_trig=0,run=0,loop=1;
 			RecordBuf.ar(
-				inputArray: In.ar(busIn,2).poll,
+				inputArray: In.ar(busIn,2),
 				bufnum:bufnum,
 				recLevel:recLevel,
 				preLevel:preLevel,
@@ -36,7 +58,8 @@ SeamlessLoopRecorder {
 		}).send(server);
 
 		server.sync;
-		synInput = Synth.new("defInput",[\busOut,busInput],server,\addToHead);
+		syns.put("input",Synth.new("defInput",[\busOut,buses.at("input")],server,\addToHead));
+		syns.put("phase",Synth.new("defPhase",[\busOut,buses.at("phase")]),server,\addToHead);
 
 		// https://fredrikolofsson.com/f0blog/buffer-xfader/
 		fnXFader ={|inBuffer, duration= 2, curve= -2, action|
@@ -66,25 +89,38 @@ SeamlessLoopRecorder {
 	// set changes the input parameters
 	set {
 		arg k,v;
-		synInput.set(k,v);
+		syns.at("input").set(k,v);
+		("[SeamlessLoopRecorder] set "++k++"="++v).postln;
+	}
+
+	// play will play a seamless loop
+	play {
+		arg name,out,buf;
+		if (syns.at(name).notNil,{
+			if (syns.at(name).isRunning,{
+				syns.at(name).free;
+			});
+		});
+		syns.put(name,Synth.after(syns.at("phase"),"defPlay",[\out,out,\buf,buf,\busPhase,buses.at("phase")]));
+		NodeWatcher.register(syns.at(name));
 	}
 
 	// record makes a new recording and callsback the result
 	record {
 		arg seconds,xfade,action;
 		Buffer.alloc(server,server.sampleRate*(seconds+xfade),2,{ arg buf1;
-			"recording primed".postln;
-			Synth.after(synInput,"defRecord",[\busIn,busInput]).onFree({
+			("[SeamlessLoopRecorder] initiated for "++seconds++" s with "++xfade++" s of xfade").postln;
+			Synth.after(syns.at("input"),"defRecord",[\busIn,buses.at("input"),\bufnum,buf1]).onFree({
 				arg syn;
-				["recorded",buf1].postln;
 				if (xfade>0,{
 					fnXFader.value(buf1,xfade,-2,action:{
 						arg buf2;
-						("done with buffer"+buf1+"and made"+buf2).postln;
+						("[SeamlessLoopRecorder] finished xfaded "++seconds++" s recording").postln;
 						action.value(buf2);
 						buf1.free;
 					});
 				},{
+					("[SeamlessLoopRecorder] finished "++seconds++" s recording").postln;
 					action.value(buf1);
 				});
 			});
@@ -92,7 +128,11 @@ SeamlessLoopRecorder {
 	}
 
 	free {
-		synInput.free;
-		busInput.free;
+		syns.keysValuesDo({ arg buf, val;
+			val.free;
+		});
+		buses.keysValuesDo({ arg buf, val;
+			val.free;
+		});
 	}
 }
