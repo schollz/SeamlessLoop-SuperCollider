@@ -37,7 +37,7 @@ SeamlessLoop {
 
 		SynthDef("defInput",{
 			arg busOut, lpf=18000, res=1.0;
-			var snd = SoundIn.ar([0,1]);
+			var snd = SoundIn.ar([0,1]).poll;
 			snd = RLPF.ar(snd,lpf,res);
 			snd = LeakDC.ar(snd);
 			Out.ar(busOut,snd);
