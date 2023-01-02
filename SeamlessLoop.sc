@@ -25,14 +25,15 @@ SeamlessLoop {
 		}).send(server);
 
 		SynthDef("defPlay",{
-			arg out,buf,busPhase;
+			arg out,buf,busPhase,attack=0.01,decay=0.1,sustain=0.9,release=1,gate=1,duration=10,amp=1;
 			var snd = BufRd.ar(
 				numChannels:2,
 				bufnum: buf,
 				phase: In.ar(busPhase,1).mod(BufSamples.ir(buf)),
 				interpolation:4,
 			);
-			Out.ar(out,snd);
+			var env = EnvGen.ar(Env.adsr(attack,decay,sustain,release),(gate-EnvGen.kr(Env.new([0,0,1],[duration,0]))),doneAction:2);
+			Out.ar(out,amp*snd*env);
 		}).send(server);
 
 		SynthDef("defInput",{
@@ -93,16 +94,28 @@ SeamlessLoop {
 		("[SeamlessLoopRecorder] set "++k++"="++v).postln;
 	}
 
-	// play will play a seamless loop
-	play {
-		arg name,out,buf;
+	// on will play a seamless loop
+	on {
+		arg name,out,buf,amp,attack,decay,sustain,release,duration;
 		if (syns.at(name).notNil,{
 			if (syns.at(name).isRunning,{
 				syns.at(name).free;
 			});
 		});
-		syns.put(name,Synth.after(syns.at("phase"),"defPlay",[\out,out,\buf,buf,\busPhase,buses.at("phase")]));
+		syns.put(name,Synth.after(syns.at("phase"),"defPlay",[
+			\out,out,\buf,buf,\busPhase,buses.at("phase"),\amp,amp,
+			\attack,attack,\decay,decay,\sustain,sustain,\release,release,\duration,duration,
+		]));
 		NodeWatcher.register(syns.at(name));
+	}
+
+	off {
+		arg name;
+		if (syns.at(name).notNil,{
+			if (syns.at(name).isRunning,{
+				syns.at(name).free;
+			});
+		});		
 	}
 
 	// record makes a new recording and callsback the result
